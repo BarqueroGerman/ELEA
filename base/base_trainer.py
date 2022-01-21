@@ -24,7 +24,6 @@ class BaseTrainer:
         self.monitor = cfg_trainer.get('monitor', 'off')
         self.wandb = "wandb" in config.config and config.config["wandb"]["store"]
         # config for recurrent training (custom training mode)
-        self.recurrent_training = cfg_trainer.get('recurrent_learning', None)
 
         # configuration to monitor model performance and save best
         if self.monitor == 'off':
@@ -66,7 +65,7 @@ class BaseTrainer:
 
         not_improved_count = 0
         for epoch in range(self.start_epoch, self.epochs + 1):
-            result = self._train_epoch(epoch, self.recurrent_training)
+            result = self._train_epoch(epoch)
 
             # save logged informations into log dict
             log = {'epoch': epoch}

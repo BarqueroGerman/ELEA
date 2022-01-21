@@ -74,6 +74,57 @@ class Embedding(BaseModel):
         return self.denses(x) if self.denses is not None else x
 
 
+# --------------- TEST ---------------
+
+class BasicMLP(BaseModel):
+    def __init__(self, input_dim, seq_length, output_dim=5, embedding_dims=[32, 32], dropout=0.5, non_linearities='relu'):
+        super(BasicMLP, self).__init__()
+        self.dropout = nn.Dropout(dropout)
+        self.nl = nl[non_linearities]()
+
+        self.backbone = None
+        if len(embedding_dims) > 0:
+            seqs = []
+            for i in range(len(embedding_dims)):
+                linear = nn.Linear(input_dim * seq_length if i==0 else embedding_dims[i-1], embedding_dims[i])
+                init_weights(linear)
+                seqs.append(nn.Sequential(self.dropout, linear, self.nl))
+            self.backbone = nn.Sequential(*seqs)
+        
+        input_head_dim = input_dim if len(embedding_dims) == 0 else embedding_dims[-1]
+        self.head = nn.Sequential(nn.Linear(input_head_dim, output_dim), 
+                                    nn.Softmax(1))
+
+    def forward(self, x):
+        x = rearrange(x, 'b t f -> b (t f)')
+        x = self.backbone(x) if self.backbone is not None else x
+        return self.head(x)
+
+class BasicMLPIndiv(BaseModel):
+    def __init__(self, input_dim, seq_length, output_dim=5, embedding_dims=[32, 32], dropout=0.5, non_linearities='relu'):
+        super(BasicMLPIndiv, self).__init__()
+        self.dropout = nn.Dropout(dropout)
+        self.nl = nl[non_linearities]()
+
+        self.backbone = None
+        if len(embedding_dims) > 0:
+            seqs = []
+            for i in range(len(embedding_dims)):
+                linear = nn.Linear(input_dim * seq_length if i==0 else embedding_dims[i-1], embedding_dims[i])
+                init_weights(linear)
+                seqs.append(nn.Sequential(self.dropout, linear, self.nl))
+            self.backbone = nn.Sequential(*seqs)
+        
+        input_head_dim = input_dim if len(embedding_dims) == 0 else embedding_dims[-1]
+        self.heads = nn.ModuleList([nn.Sequential(nn.Linear(input_head_dim, 1), nn.Sigmoid()) for i in range(output_dim)])
+
+    def forward(self, x):
+        #x = torch.zeros_like(x).to(x.device)
+        x = rearrange(x, 'b t f -> b (t f)')
+        x = self.backbone(x) if self.backbone is not None else x
+        pred = torch.hstack([h(x) for h in self.heads])
+        return pred
+
 # --------------- RNN ---------------
 
 class EncoderRNN(BaseModel):

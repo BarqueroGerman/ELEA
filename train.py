@@ -15,7 +15,7 @@ import wandb
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
 
 # fix random seeds for reproducibility
-SEED = 10
+SEED = 6
 torch.manual_seed(SEED)
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
@@ -49,29 +49,14 @@ def main(config, resume, wandb_id=None):
 
     # setup data_loader instances
     data_loader = config.init_obj('data_loader_training', module_data)
-    valid_data_loader = config.init_obj('data_loader_validation', module_data)
+    valid_data_loader = data_loader.split_validation()
 
-
-    # ----------- TEST -------------
-    # Code to test the code to access a specific segment from the data loader.
-    """
-    from utils import parse_lhand_at, parse_face_at
-    session, num_frame, offset, task, part = "136175", 8000, 99, "talk", "FC1_T"
-    #session, num_frame, offset, task, part = "136175", 22000, 99, "lego", "FC1_L"
-    data, target = data_loader.dataset.get_custom_segment(session, task, num_frame, transform=True)
-    loaded = np.split(data[offset].cpu().numpy().astype(int), 2)[0]
-    readed = parse_face_at(os.path.join("/annotations/training/all", session, part, "annotations_raw.hdf5"), num_frame+offset)[1].ravel()
-    print(loaded)
-    print(readed)
-    assert (loaded == readed).all(), "The loaded and readed data are not the same"
-    """
-    # ---------------------------------
-
-    
-    logger.info(f"Number of training samples: {data_loader.n_samples}")
-    logger.info(f"Number of validation samples: {valid_data_loader.n_samples}")
+    batch_size = config["data_loader_training"]["args"]["batch_size"]
+    logger.info(f"Number of training samples: {len(data_loader) * batch_size}")
+    logger.info(f"Number of validation samples: {len(valid_data_loader) * batch_size}")
 
     # build model architecture, then print to console
+    config["arch"]["args"]["seq_length"] = config["data_loader_training"]["args"]["w_size"] # totally related
     model = config.init_obj('arch', module_arch)
     logger.info(model)
 

@@ -4,7 +4,11 @@ import numpy as np
 import glob
 import csv
 from tqdm import tqdm
-from data_loader import BaseDatasetELEA
+from data_loader import BaseDatasetELEA, DataLoaderELEA
+
+
+SEED = 6
+np.random.seed(SEED)
 
 ###################################################################333
 def main(data_path, speech_th, w_size, w_th, w_step, use_speech, normalize_x):
@@ -28,11 +32,32 @@ def main(data_path, speech_th, w_size, w_th, w_step, use_speech, normalize_x):
     #print(Y_data[:3])
 """
 
-    dataset = BaseDatasetELEA('./data/preprocessed_data', transform=None, target_transform=None)
+    data_loader = DataLoaderELEA('./data/preprocessed_data', 32, shuffle=True, p_val=0.985, w_step=20)
+    data_loader_valid = data_loader.split_validation()
+
+    print("Training samples: " + str(len(data_loader) * 32))
+    print("Validation samples: " + str(len(data_loader_valid) * 32))
+    print("Total samples: " + str(len(data_loader.dataset)))
+
+    """
+    dataset = data_loader.dataset
     print(len(dataset))
     for i in range(960, 970):#len(dataset)):
         features, target = dataset[i]
         print((features.shape, target))
+    """
+
+    for batch_idx, batch in enumerate(data_loader):
+        x, y = batch
+        print(x.shape)
+        print(y)#[:5])
+        break
+
+    for batch_idx, batch in enumerate(data_loader_valid):
+        x, y = batch
+        print(x.shape)
+        print(y[:5])
+        break
 
     print(f"Correctly loaded!")
 ###################################################################

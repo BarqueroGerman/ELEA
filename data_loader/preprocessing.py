@@ -3,7 +3,7 @@ import pickle
 import numpy as np
 import glob
 import csv
-
+from tqdm import tqdm
 
 
 def meanfilt (x, k):
@@ -34,6 +34,7 @@ def preprocess_X_data(traj_big5, traj_big5_norm, speech_th, w_size, w_th, w_step
     X_data_fname = []
     X_data_fname_unique = []
     Y_data = []
+    Y_data_unique = []
 
     for n, f_name in enumerate(traj_big5_norm):
         traj_smooth = dict()
@@ -75,15 +76,18 @@ def preprocess_X_data(traj_big5, traj_big5_norm, speech_th, w_size, w_th, w_step
                 X_data_fname.append(f_name)
                 Y_data.append(gt_data[f_name])
         X_data_fname_unique.append(f_name)
+        Y_data_unique.append(gt_data[f_name])
 
     #
     # WARNING HERE: RESHAPING FROM (SAMPLES, NUM_FEAT, WINDOW_SIZE) TO (SAMPLES, NUM_FEAT x WINDOW_SIZE, 1)
     #
-    print('reshaping from ', np.array(X_data).shape)
-    X_data = np.array(X_data).reshape((np.array(X_data).shape[0],np.array(X_data).shape[1]*np.array(X_data).shape[2], 1))
-    print('to ', np.array(X_data).shape)
+    #print('reshaping from ', np.array(X_data).shape)
+    #X_data = np.array(X_data).reshape((np.array(X_data).shape[0],np.array(X_data).shape[1]*np.array(X_data).shape[2], 1))
+    #print('to ', np.array(X_data).shape)
+    X_data = np.array(X_data)
+    X_data = np.transpose(X_data, (0, 2, 1))
 
-    return X_data, X_data_fname, X_data_fname_unique, Y_data
+    return X_data, X_data_fname, X_data_fname_unique, Y_data, Y_data_unique
 
 
 
@@ -142,6 +146,8 @@ def load_and_restructure_gt_data(gt_path, traj_list,dataset_fname):
 
 
     ###########################################################
+    if not os.path.exists('./output/preprocessed_data/'):
+        os.makedirs('./output/preprocessed_data/')
     with open(os.path.join('./output/preprocessed_data/',dataset_fname+'_norm_factor.pkl'), 'wb') as handle:
         pickle.dump(norm_fact, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
@@ -184,8 +190,8 @@ def load_big5_sent_emo_trajectories(traj_list,data_path):
     traj_big5_sent_emot = dict()
 
     # loading the Big-5 trajactories
-    for ID in traj_list:
-        print(ID)
+    for ID in tqdm(traj_list):
+        #print(ID)
         traits_vec = dict()
         for t in traits:
             # loading the trajectory of each trait
@@ -249,7 +255,7 @@ def load_jubject_IDs(dir_path):
 
 
 ###################################################################333
-def main(data_path, speech_th, w_size, w_th, w_step, use_speech, normalize_x):
+def preprocess(data_path, speech_th, w_size, w_th, w_step, use_speech, normalize_x):
 
     # load the list of subject IDs (e.g. [12_K, 12_L, 14_M], etc)
     traj_list = load_jubject_IDs(os.path.join(data_path,'trajectory_15s_big5'))
@@ -269,15 +275,18 @@ def main(data_path, speech_th, w_size, w_th, w_step, use_speech, normalize_x):
 
     # Generating multiple samples for each trajectory,
     # given the window size, speech activity threshold, etc
-    X_data, X_data_fname, X_data_fname_unique, Y_data = preprocess_X_data(traj_big5_sent_emot, traj_big5_sent_emot_norm, speech_th, w_size, w_th, w_step, gt_data, use_speech)
+    X_data, X_data_fname, X_data_fname_unique, Y_data, Y_data_unique = preprocess_X_data(traj_big5_sent_emot, traj_big5_sent_emot_norm, speech_th, w_size, w_th, w_step, gt_data, use_speech)
 
-    print('Data size and feaure vec. length', np.array(X_data).shape, np.array(X_data_fname).shape, np.array(X_data_fname_unique).shape, np.array(Y_data).shape)
+    print('Data size and feaure vec. length', np.array(X_data).shape, np.array(X_data_fname).shape, np.array(X_data_fname_unique).shape, np.array(Y_data).shape, np.array(Y_data_unique).shape)
 
     # saving on disk the preprocessed data
     np.save(os.path.join(data_path,'preprocessed_data/',dataset_fname+'_X_data.npy'), X_data)
     np.save(os.path.join(data_path,'preprocessed_data/',dataset_fname+'_X_data_fname.npy'), X_data_fname)
     np.save(os.path.join(data_path,'preprocessed_data/',dataset_fname+'_X_data_fname_unique.npy'), X_data_fname_unique)
     np.save(os.path.join(data_path,'preprocessed_data/',dataset_fname+'_Y_data.npy'), Y_data)
+    np.save(os.path.join(data_path,'preprocessed_data/',dataset_fname+'_Y_data_unique.npy'), Y_data_unique)
+
+    print(f"Correctly saved to '{os.path.join(data_path, 'preprocessed_data')}'")
 ###################################################################
 
 
@@ -294,4 +303,4 @@ if __name__== "__main__":
     use_speech = False  # to include or not the speech activity fecture as part of the input feature fector
     normalize_x = False # normalize X data by (X-mean)/std
 
-    main('./data', speech_th, w_size, w_th, w_step, use_speech, normalize_x)
+    preprocess('./data', speech_th, w_size, w_th, w_step, use_speech, normalize_x)

@@ -25,6 +25,7 @@ np.random.seed(SEED)
 def train_leaveoneout(config):
     config.config["seed"] = SEED
     config["data_loader"]["args"]["log"] = False # to keep it clean
+    config['trainer']['verbosity'] = 0
     logger = config.get_logger('train', config['trainer']['verbosity'])
 
     for i in range(torch.cuda.device_count()):
@@ -47,26 +48,14 @@ def train_leaveoneout(config):
         #logger.info(f"Number of validation samples: {len(valid_data_loader) * batch_size}")
 
         store_to_wandb = "wandb" in config.config and config.config["wandb"]["store"]
-        if store_to_wandb and resume:
-            if wandb_id == None:
-                raise Exception(f"[ERROR] You need to specify the wandb id for the run you want to attach.")
-
-            wandb.init(project=config.config["wandb"]["project"],
-                        name=config.config["name"],
-                        id=wandb_id,
+        if store_to_wandb:
+            run = wandb.init(project=config.config["wandb"]["project"],
+                        name=config.config["name"] + "_" + leftout_idx,
                         entity="barquerogerman",
                         notes=config.config["wandb"]["description"],
                         tags=config.config["wandb"]["description"],
                         config=config.config,
-                        resume="must" if resume else "never")
-            print(f"Wandb was resumed successfully.")
-        elif store_to_wandb:
-            wandb.init(project=config.config["wandb"]["project"],
-                        name=config.config["name"],
-                        entity="barquerogerman",
-                        notes=config.config["wandb"]["description"],
-                        tags=config.config["wandb"]["description"],
-                        config=config.config)
+                        reinit=True)
 
         # build model architecture, then print to console
         config["arch"]["args"]["seq_length"] = config["data_loader"]["args"]["w_size"] # they are equal
@@ -102,7 +91,8 @@ def train_leaveoneout(config):
         trainer.train()
 
         logger.info(f"[{leftout_idx}/{num_participants}] Finished training!")
-
+        if store_to_wandb:
+            run.finish()
 
 
 

@@ -1,0 +1,64 @@
+{
+    "name": "mlp_test_few_1p_15s",
+    "n_gpu": 1,
+    "wandb": {
+        "store": false,
+        "project": "elea",
+        "description": "",
+        "tags": ""
+    },
+    "arch": {
+        "type": "BasicMLPIndiv",
+        "args": {
+            "input_dim": 10,
+            "output_dim": 5,
+            "embedding_dims": [256, 128],
+            "dropout": 0.0,
+            "non_linearities": "tanh"
+        }
+    },
+    "optimizer": {
+        "type": "Adam",
+        "args": {
+            "lr": 1e-4,
+            "weight_decay": 0.001,
+            "amsgrad": true
+        }
+    },
+    "loss": "mse_loss",
+    "metrics": [
+        "mse_O", "mse_C", "mse_E", "mse_A", "mse_N"
+    ],
+    "lr_scheduler": {
+        "type": "StepLR",
+        "args": {
+            "step_size": -1,
+            "gamma": 0.9
+        }
+    },
+    "trainer": {
+        "epochs": 5,
+        "save_dir": "./data/models/test/",
+        "save_period": 5,
+        "verbosity": 2,
+        "monitor": "min val_loss",
+        "early_stop": -1,
+        "validation_frequency": 1,
+        "tensorboard": true
+    },
+    "data_loader": {
+        "type": "DataLoaderELEA",
+        "args": {
+            "data_dir": "./data/preprocessed_data",
+            "batch_size": 512,
+            "shuffle": true,
+            "num_workers": 0,
+            "speech_th": 0.01,
+            "w_size": 15,
+            "w_th": 0.75,
+            "w_step": 15, 
+            "p_val": 0.20,
+            "log": true
+        }
+    }
+}

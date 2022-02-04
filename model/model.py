@@ -77,6 +77,7 @@ class Embedding(BaseModel):
 # --------------- TEST ---------------
 
 class BasicMLP(BaseModel):
+    # MLP with that predicts all traits at once.
     def __init__(self, input_dim, seq_length, output_dim=5, embedding_dims=[32, 32], dropout=0.5, non_linearities='relu'):
         super(BasicMLP, self).__init__()
         self.dropout = nn.Dropout(dropout)
@@ -101,6 +102,7 @@ class BasicMLP(BaseModel):
         return self.head(x)
 
 class BasicMLPIndiv(BaseModel):
+    # MLP with an exclusive head (MLP) for each OCEAN trait
     def __init__(self, input_dim, seq_length, output_dim=5, embedding_dims=[32, 32], dropout=0.5, non_linearities='relu'):
         super(BasicMLPIndiv, self).__init__()
         self.dropout = nn.Dropout(dropout)
@@ -149,79 +151,6 @@ class EncoderRNN(BaseModel):
         else:
             outputs, state = self.rnn(x, state)
         return state
-
-
-# --------------- TCN ---------------
-
-class TemporalBlock(BaseModel):
-    """
-        Original TCN. Chom1d replaced by padding to the left only. This way, we can choose not to keep the same output dimension.
-    """
-    def __init__(self, n_inputs, n_outputs, kernel_size, stride, dilation, padding, non_linearities="relu", dropout=0.2):
-        super(TemporalBlock, self).__init__()
-        self.padding = padding
-        self.dilation = dilation
-        
-        conv1 = weight_norm(nn.Conv1d(n_inputs, n_outputs, kernel_size, stride=stride, padding=0, dilation=dilation))
-        conv1.weight.data.normal_(0, 0.01)
-        relu1 = nl[non_linearities]()
-        dropout1 = nn.Dropout(dropout)
-        self.block1 = nn.Sequential(conv1, relu1, dropout1)
-
-        conv2 = weight_norm(nn.Conv1d(n_outputs, n_outputs, kernel_size=1, stride=stride, padding=0, dilation=1)) # 1D1
-        conv2.weight.data.normal_(0, 0.01)
-        relu2 = nl[non_linearities]()
-        dropout2 = nn.Dropout(dropout)
-        self.block2 = nn.Sequential(conv2, relu2, dropout2)
-
-        self.downsample = nn.Conv1d(n_inputs, n_outputs, 1) if n_inputs != n_outputs else None
-        self.relu = nl[non_linearities]()
-        self.init_weights()
-
-    def init_weights(self):
-        if self.downsample is not None:
-            self.downsample.weight.data.normal_(0, 0.01)
-
-    def forward(self, x, log=False):
-        y = F.pad(x, (self.padding, 0))
-        y = self.block1(y)
-        #y = F.pad(y, (0, 0)) # second has kernel size 1 and dilation 1
-        y = self.block2(y)
-            
-        res = x if self.downsample is None else self.downsample(x) # downsample if needed
-        
-        # slice needed if temporal dimensions do not match (due to not padding)
-        # this means we discard the left-most outputs
-        if y.shape[2] < res.shape[2]:
-            diff = res.shape[2] - y.shape[2]
-            res = res[:,:,diff:]
-        return self.relu(y + res) # residual connection
-
-class TemporalConvNet(BaseModel):
-    def __init__(self, num_inputs, num_channels, orders=[0, ], dilations=None, kernel_sizes=2, keep_length=True, dropout=0.2, non_linearities="relu"):
-        super(TemporalConvNet, self).__init__()
-        
-        self.orders = orders
-
-        self.layers = []
-        num_levels = len(num_channels)
-        assert type(kernel_sizes) is int or num_levels == len(kernel_sizes)
-        assert dilations is None or num_levels == len(dilations)
-        for i in range(num_levels):
-            dilation_size = 2 ** i if dilations is None else dilations[i]
-            in_channels = num_inputs if i == 0 else num_channels[i-1]
-            out_channels = num_channels[i]
-            kernel_size = kernel_sizes if type(kernel_sizes) is int else kernel_sizes[i]
-            self.layers += [TemporalBlock(in_channels, out_channels, 
-                                     kernel_size, 
-                                     stride=1, dilation=dilation_size,
-                                     padding=(kernel_size-1) * dilation_size if keep_length else 0, 
-                                     dropout=dropout, non_linearities=non_linearities)]
-
-        self.network = nn.Sequential(*self.layers)
-
-    def forward(self, x):
-        return self.network(x)
 
 
 # --------------- Transformer ---------------

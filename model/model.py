@@ -50,12 +50,9 @@ rnn_default_initial_states = {
 # --------------- AUXILIAR CLASSES ---------------
 
 class Embedding(BaseModel):
-    def __init__(self, fv_version, input_dim, embedding_dims=[], orders=[0, ], dropout=0.5, non_linearities='relu', contiguous=False):
+    def __init__(self, input_dim, embedding_dims=[], dropout=0.5, non_linearities='relu'):
         super(Embedding, self).__init__()
-        self.fv_version = fv_version
-        self.orders = orders
         self.non_linearities = non_linearities
-        self.contiguous = contiguous
 
         self.dropout = nn.Dropout(dropout)
         self.nl = nl[non_linearities]()
@@ -64,13 +61,12 @@ class Embedding(BaseModel):
         if len(embedding_dims) > 0:
             seqs = []
             for i in range(len(embedding_dims)):
-                linear = nn.Linear(input_dim * len(orders) if i==0 else embedding_dims[i-1], embedding_dims[i])
+                linear = nn.Linear(input_dim if i==0 else embedding_dims[i-1], embedding_dims[i])
                 init_weights(linear)
                 seqs.append(nn.Sequential(self.dropout, linear, self.nl))
             self.denses = nn.Sequential(*seqs)
 
     def forward(self, x):
-        x = transform_input_order(x, self.orders, fv_version=self.fv_version, contiguous=self.contiguous)
         return self.denses(x) if self.denses is not None else x
 
 
@@ -83,14 +79,7 @@ class BasicMLP(BaseModel):
         self.dropout = nn.Dropout(dropout)
         self.nl = nl[non_linearities]()
 
-        self.backbone = None
-        if len(embedding_dims) > 0:
-            seqs = []
-            for i in range(len(embedding_dims)):
-                linear = nn.Linear(input_dim * seq_length if i==0 else embedding_dims[i-1], embedding_dims[i])
-                init_weights(linear)
-                seqs.append(nn.Sequential(self.dropout, linear, self.nl))
-            self.backbone = nn.Sequential(*seqs)
+        self.backbone = Embedding(input_dim*seq_length, embedding_dims=embedding_dims, dropout=dropout, non_linearities=non_linearities)
         
         input_head_dim = input_dim if len(embedding_dims) == 0 else embedding_dims[-1]
         self.head = nn.Sequential(nn.Linear(input_head_dim, output_dim), 
@@ -98,7 +87,7 @@ class BasicMLP(BaseModel):
 
     def forward(self, x):
         x = rearrange(x, 'b t f -> b (t f)')
-        x = self.backbone(x) if self.backbone is not None else x
+        x = self.backbone(x)
         return self.head(x)
 
 class BasicMLPIndiv(BaseModel):
@@ -108,14 +97,7 @@ class BasicMLPIndiv(BaseModel):
         self.dropout = nn.Dropout(dropout)
         self.nl = nl[non_linearities]()
 
-        self.backbone = None
-        if len(embedding_dims) > 0:
-            seqs = []
-            for i in range(len(embedding_dims)):
-                linear = nn.Linear(input_dim * seq_length if i==0 else embedding_dims[i-1], embedding_dims[i])
-                init_weights(linear)
-                seqs.append(nn.Sequential(self.dropout, linear, self.nl))
-            self.backbone = nn.Sequential(*seqs)
+        self.backbone = Embedding(input_dim*seq_length, embedding_dims=embedding_dims, dropout=dropout, non_linearities=non_linearities)
         
         input_head_dim = input_dim if len(embedding_dims) == 0 else embedding_dims[-1]
         self.heads = nn.ModuleList([nn.Sequential(nn.Linear(input_head_dim, 1), nn.Sigmoid()) for i in range(output_dim)])
@@ -123,7 +105,7 @@ class BasicMLPIndiv(BaseModel):
     def forward(self, x):
         #x = torch.zeros_like(x).to(x.device)
         x = rearrange(x, 'b t f -> b (t f)')
-        x = self.backbone(x) if self.backbone is not None else x
+        x = self.backbone(x)
         pred = torch.hstack([h(x) for h in self.heads])
         return pred
 
@@ -131,7 +113,7 @@ class BasicMLPIndiv(BaseModel):
 
 class EncoderRNN(BaseModel):
     def __init__(self, input_dim, hidden_dim, n_layers, dropout=0.5, rnn_type='lstm'):
-        super(Encoder, self).__init__()
+        super(EncoderRNN, self).__init__()
         self.hidden_dim = hidden_dim
         self.n_layers = n_layers
         
@@ -150,8 +132,28 @@ class EncoderRNN(BaseModel):
             outputs, state = self.rnn(x)#, (h0, c0))
         else:
             outputs, state = self.rnn(x, state)
-        return state
+        return outputs, state
 
+
+class RecurrentNN(BaseModel):
+    # Participants are split and each goes through the same encoder. They share NO information between them.
+    def __init__(self, input_dim, output_dim, seq_length=100, rnn_type='lstm', hidden_dim=10, n_layers=(1,1), embedding_dims=[512, 512], linear_output_dims=[512, 512], dropout=0.5, non_linearities='relu'):
+        super().__init__()
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+
+        # batch_first => (batch_size, seq_len, features)
+        self.embedding = Embedding(self.input_dim, embedding_dims, dropout=dropout, non_linearities=non_linearities)
+        self.encoder = EncoderRNN(embedding_dims[-1], hidden_dim, n_layers[0], rnn_type=rnn_type, dropout=dropout) # same hidden dim for encoder and decoder
+        self.head = nn.Sequential(Embedding(hidden_dim, linear_output_dims + [output_dim, ], dropout=dropout, non_linearities=non_linearities), 
+                                nn.Softmax(1))
+
+    def forward(self, x):
+        x = self.embedding(x) # -> (batch_size, seq_length, embed_dim)
+        output, state = self.encoder(x) # -> output is (batch_size, seq_length, hidden_size)
+        output = output[:,-1] # we only take the output from the last step -> (batch_size, hidden_size)
+        output = self.head(output) # -> (batch_size, 5)
+        return output
 
 # --------------- Transformer ---------------
 
@@ -240,116 +242,15 @@ class Block(nn.Module):
         x = x + self.drop_path(self.mlp(self.norm2(x)))
         return x, attn_map
 
-class PoseTransformer(BaseModel):
-    def __init__(self, orders=[0,], num_frame=100, num_joints=80, embed_dim_ratio=8, depth=4,
-                 num_heads=8, mlp_ratio=1.5, qkv_bias=True, qk_scale=None,
-                 drop_rate=0., attn_drop_rate=0., drop_path_rate=0.2,  norm_layer=None):
-        """    ##########hybrid_backbone=None, representation_size=None,
-        Args:
-            num_frame (int, tuple): input frame number
-            num_joints (int, tuple): joints number
-            embed_dim_ratio (int): embedding dimension ratio
-            depth (int): depth of transformer
-            num_heads (int): number of attention heads
-            mlp_ratio (int): ratio of mlp hidden dim to embedding dim
-            qkv_bias (bool): enable bias for qkv if True
-            qk_scale (float): override default qk scale of head_dim ** -0.5 if set
-            drop_rate (float): dropout rate
-            attn_drop_rate (float): attention dropout rate
-            drop_path_rate (float): stochastic depth rate
-            norm_layer: (nn.Module): normalization layer
-        """
-        super().__init__()
-        self.orders = orders
-        in_chans = len(self.orders) * 3 # in_chans (int): number of input channels, 2D joints have 2 channels: (x,y)
-
-        norm_layer = norm_layer or partial(nn.LayerNorm, eps=1e-6)
-        embed_dim = embed_dim_ratio * num_joints   #### temporal embed_dim is num_joints * spatial embedding dim ratio
-        self.out_dim = embed_dim     #### output dimension is num_joints * 3
-
-        ### spatial patch embedding
-        self.Spatial_patch_to_embedding = nn.Linear(in_chans, embed_dim_ratio)
-        self.Spatial_pos_embed = nn.Parameter(torch.zeros(1, num_joints, embed_dim_ratio))
-
-        self.Temporal_pos_embed = nn.Parameter(torch.zeros(1, num_frame, embed_dim))
-        self.pos_drop = nn.Dropout(p=drop_rate)
-
-
-        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]  # stochastic depth decay rule
-
-        self.Spatial_blocks = nn.ModuleList([
-            Block(
-                dim=embed_dim_ratio, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, qk_scale=qk_scale,
-                drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer)
-            for i in range(depth)])
-
-        self.blocks = nn.ModuleList([
-            Block(
-                dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, qk_scale=qk_scale,
-                drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer)
-            for i in range(depth)])
-
-        self.Spatial_norm = norm_layer(embed_dim_ratio)
-        self.Temporal_norm = norm_layer(embed_dim)
-
-        ####### A easy way to implement weighted mean
-        self.weighted_mean = torch.nn.Conv1d(in_channels=num_frame, out_channels=1, kernel_size=1)
-
-        #self.head = nn.Sequential(
-        #    nn.LayerNorm(embed_dim),
-        #    nn.Linear(embed_dim , out_dim),
-        #)
-
-
-    def Spatial_forward_features(self, x):
-        b, _, f, p = x.shape  ##### b is batch size, f is number of frames, p is number of joints
-        x = rearrange(x, 'b c f p  -> (b f) p  c', )
-
-        x = self.Spatial_patch_to_embedding(x)
-        x += self.Spatial_pos_embed
-        x = self.pos_drop(x)
-
-        for blk in self.Spatial_blocks:
-            x = blk(x)
-
-        x = self.Spatial_norm(x)
-        x = rearrange(x, '(b f) w c -> b f (w c)', f=f)
-        return x
-
-    def forward_features(self, x):
-        b  = x.shape[0]
-        x += self.Temporal_pos_embed
-        x = self.pos_drop(x)
-        for blk in self.blocks:
-            x = blk(x)
-
-        x = self.Temporal_norm(x)
-        ##### x size [b, f, emb_dim], then take weighted mean on frame dimension, we only predict 3D pose of the center frame
-        x = self.weighted_mean(x)
-        x = x.view(b, 1, -1)
-        return x
-
-    # forward for 1 participant of the session
-    def forward(self, x):
-        # INPUT: [batch_size, sequence, joint_num, channels]
-        x = x.permute(0, 3, 1, 2)
-        b, _, _, p = x.shape
-        ### now x is [batch_size, 2 channels, receptive frames, joint_num], following image data
-        x = self.Spatial_forward_features(x)
-        x = self.forward_features(x)
-        #x = self.head(x)
-
-        #x = x.view(b, 1, p, -1)
-        return x
 
 class PoseTransformerTemporal(BaseModel):
-    def __init__(self, orders=[0,], num_frame=100, num_joints=80, embed_dim_ratio=8, depth=4,
+    def __init__(self, seq_length=100, input_dim=15, output_dim=5, embed_dim_ratio=8, depth=4,
                  num_heads=8, mlp_ratio=1.5, qkv_bias=True, qk_scale=None,
                  drop_rate=0., attn_drop_rate=0., drop_path_rate=0.2,  norm_layer=None):
         """    ##########hybrid_backbone=None, representation_size=None,
         Args:
-            num_frame (int, tuple): input frame number
-            num_joints (int, tuple): joints number
+            num_frames (int, tuple): input frames number
+            input_features (int): number of features
             embed_dim_ratio (int): embedding dimension ratio
             depth (int): depth of transformer
             num_heads (int): number of attention heads
@@ -362,16 +263,14 @@ class PoseTransformerTemporal(BaseModel):
             norm_layer: (nn.Module): normalization layer
         """
         super().__init__()
-        self.orders = orders
-        in_chans = len(self.orders) * 3 # in_chans (int): number of input channels, 2D joints have 2 channels: (x,y)
 
         norm_layer = norm_layer or partial(nn.LayerNorm, eps=1e-6)
-        embed_dim = embed_dim_ratio * num_joints   #### temporal embed_dim is num_joints * spatial embedding dim ratio
+        embed_dim = embed_dim_ratio * input_dim   #### temporal embed_dim is num_joints * spatial embedding dim ratio
         self.out_dim = embed_dim
 
         ### temporal patch embedding
-        self.Temporal_patch_to_embedding = nn.Linear(in_chans * num_joints, embed_dim)
-        self.Temporal_pos_embed = nn.Parameter(torch.zeros(1, num_frame, embed_dim))
+        self.Temporal_patch_to_embedding = nn.Linear(input_dim, embed_dim)
+        self.Temporal_pos_embed = nn.Parameter(torch.zeros(1, seq_length, embed_dim))
         self.pos_drop = nn.Dropout(p=drop_rate)
 
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]  # stochastic depth decay rule
@@ -385,12 +284,14 @@ class PoseTransformerTemporal(BaseModel):
         self.Temporal_norm = norm_layer(embed_dim)
 
         ####### A easy way to implement weighted mean
-        self.weighted_mean = torch.nn.Conv1d(in_channels=num_frame, out_channels=1, kernel_size=1)
+        self.weighted_mean = torch.nn.Conv1d(in_channels=seq_length, out_channels=1, kernel_size=1)
 
+        self.head = nn.Sequential(nn.Linear(embed_dim, 5), 
+                                    nn.Softmax(1))
 
-    def temporal_forward(self, x):
-        b, _, f, p = x.shape  ##### b is batch size, f is number of frames, p is number of joints
-        x = rearrange(x, 'b c f p  -> b f (p c)', )
+    def forward(self, x):
+        # INPUT: [batch_size, sequence, features]
+        b, f, p = x.shape
 
         x = self.Temporal_patch_to_embedding(x)
         x += self.Temporal_pos_embed
@@ -398,117 +299,9 @@ class PoseTransformerTemporal(BaseModel):
         for blk in self.blocks:
             x = blk(x)
 
-        x = self.Temporal_norm(x)
-        ##### x size [b, f, emb_dim], then take weighted mean on frame dimension, we only predict 3D pose of the center frame
-        x = self.weighted_mean(x)
-        x = x.view(b, 1, -1)
+        x = self.Temporal_norm(x) # -> (b, f, embed_dim)
+        x = self.weighted_mean(x) # -> (b, 1, embed_dim)
+        x = x.view(b, -1) # -> (b, embed_dim)
+        x = self.head(x) # -> (b, 5)
         return x
-
-    # forward for 1 participant of the session
-    def forward(self, x):
-        # INPUT: [batch_size, sequence, joint_num, channels]
-        x = x.permute(0, 3, 1, 2)
-        b, _, _, p = x.shape
-        ### now x is [batch_size, 2 channels, receptive frames, joint_num], following image data
-        x = self.temporal_forward(x)
-        return x
-    
-    def get_attention_maps(self, x):
-        # INPUT: [batch_size, sequence, joint_num, channels]
-        b, f, p, _ = x.shape
-        x = rearrange(x, 'b f p c  -> b f (p c)', )
-
-        x = self.Temporal_patch_to_embedding(x)
-        x += self.Temporal_pos_embed
-        x = self.pos_drop(x)
-        att_maps = []
-        for blk in self.blocks:
-            x, att_map = blk.get_attention_maps(x)
-            att_maps.append(att_map)
-
-        return torch.stack(att_maps, axis=1)
-    
-class PoseTransformerTemporal_hierarchical(BaseModel):
-    def __init__(self, orders=[0,], num_frame=100, num_joints=80, embed_dim_ratio=8, depth=4,
-                 num_heads=8, mlp_ratio=1.5, qkv_bias=True, qk_scale=None,
-                 drop_rate=0., attn_drop_rate=0., drop_path_rate=0.2,  norm_layer=None,
-                 reduction=2, pooling='average'):
-        """    ##########hybrid_backbone=None, representation_size=None,
-        Args:
-            num_frame (int, tuple): input frame number
-            num_joints (int, tuple): joints number
-            embed_dim_ratio (int): embedding dimension ratio
-            depth (int): depth of transformer
-            num_heads (int): number of attention heads
-            mlp_ratio (int): ratio of mlp hidden dim to embedding dim
-            qkv_bias (bool): enable bias for qkv if True
-            qk_scale (float): override default qk scale of head_dim ** -0.5 if set
-            drop_rate (float): dropout rate
-            attn_drop_rate (float): attention dropout rate
-            drop_path_rate (float): stochastic depth rate
-            norm_layer: (nn.Module): normalization layer
-        """
-        super().__init__()
-        self.orders = orders
-        in_chans = len(self.orders) * 3 # in_chans (int): number of input channels, 2D joints have 2 channels: (x,y)
-
-        norm_layer = norm_layer or partial(nn.LayerNorm, eps=1e-6)
-        embed_dim = embed_dim_ratio * num_joints   #### temporal embed_dim is num_joints * spatial embedding dim ratio
-        self.out_dim = embed_dim#int(np.sum([embed_dim // (reduction**i) for i in range(depth)]))
-
-        ### temporal patch embedding
-        self.Temporal_patch_to_embedding = nn.Linear(in_chans * num_joints, embed_dim)
-        self.Temporal_pos_embed = nn.Parameter(torch.zeros(1, num_frame, embed_dim))
-        self.pos_drop = nn.Dropout(p=drop_rate)
-        
-
-        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]  # stochastic depth decay rule
-
-        if pooling == 'average':
-            self.pooling = torch.nn.AvgPool1d(reduction, stride=None, padding=0, ceil_mode=False, count_include_pad=True)
-        elif pooling == 'max':
-            self.pooling = torch.nn.MaxPool1d(reduction, stride=None, padding=0, ceil_mode=False)
-        else:
-            raise Exception(f"'{pooling}' not implemented as pooling method.")
-            
-        self.blocks = nn.ModuleList([
-                Block(
-                    dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, qk_scale=qk_scale,
-                    drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer)
-            for i in range(depth)])
-
-        self.Temporal_norm = norm_layer(self.out_dim)
-
-        ####### A easy way to implement weighted mean
-        self.weighted_mean = torch.nn.Conv1d(in_channels=num_frame // (reduction**(depth-1)), out_channels=1, kernel_size=1)
-
-
-    def temporal_forward(self, x):
-        b, _, f, p = x.shape  ##### b is batch size, f is number of frames, p is number of joints
-        x = rearrange(x, 'b c f p  -> b f (p c)', )
-
-        x = self.Temporal_patch_to_embedding(x)
-        x += self.Temporal_pos_embed
-        x = self.pos_drop(x)
-        
-        for i, blk in enumerate(self.blocks):
-            x = blk(x)
-            if i != len(self.blocks) - 1:
-                x = self.pooling(x.transpose(1,2)).transpose(1,2)
-
-        x = self.Temporal_norm(x)
-        ##### x size [b, f, emb_dim], then take weighted mean on frame dimension, we only predict 3D pose of the center frame
-        x = self.weighted_mean(x)
-        x = x.view(b, 1, -1)
-        return x
-
-    # forward for 1 participant of the session
-    def forward(self, x):
-        # INPUT: [batch_size, sequence, joint_num, channels]
-        x = x.permute(0, 3, 1, 2)
-        b, _, _, p = x.shape
-        ### now x is [batch_size, 2 channels, receptive frames, joint_num], following image data
-        x = self.temporal_forward(x)
-        return x
-    
     

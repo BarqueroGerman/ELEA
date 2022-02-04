@@ -1,5 +1,5 @@
 {
-    "name": "mlp_test_few_1p_15s",
+    "name": "transformer_test",
     "n_gpu": 1,
     "wandb": {
         "store": false,
@@ -8,13 +8,10 @@
         "tags": ""
     },
     "arch": {
-        "type": "BasicMLPIndiv",
+        "type": "PoseTransformerTemporal",
         "args": {
             "input_dim": 10,
-            "output_dim": 5,
-            "embedding_dims": [256, 128],
-            "dropout": 0.0,
-            "non_linearities": "tanh"
+            "output_dim": 5
         }
     },
     "optimizer": {
@@ -50,7 +47,7 @@
         "type": "DataLoaderELEA",
         "args": {
             "data_dir": "./data/preprocessed_data",
-            "batch_size": 512,
+            "batch_size": 256,
             "shuffle": true,
             "num_workers": 0,
             "speech_th": 0.01,

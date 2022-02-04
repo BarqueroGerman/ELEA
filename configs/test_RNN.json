@@ -1,5 +1,5 @@
 {
-    "name": "mlp_test_few_1p_15s",
+    "name": "rnn_test",
     "n_gpu": 1,
     "wandb": {
         "store": false,
@@ -8,13 +8,16 @@
         "tags": ""
     },
     "arch": {
-        "type": "BasicMLPIndiv",
+        "type": "RecurrentNN",
         "args": {
             "input_dim": 10,
             "output_dim": 5,
-            "embedding_dims": [256, 128],
+            "embedding_dims": [32 ],
+            "linear_output_dims": [32 ],
+            "hidden_dim": 1024,
             "dropout": 0.0,
-            "non_linearities": "tanh"
+            "non_linearities": "tanh",
+            "rnn_type": "lstm"
         }
     },
     "optimizer": {

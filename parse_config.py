@@ -32,8 +32,8 @@ class ConfigParser:
             resumed_folder = os.path.dirname(resume)
             self._save_dir = Path(resumed_folder)
             self._log_dir = Path(resumed_folder.replace("/models/", "/log/"))
-            print(self._save_dir)
-            print(self._log_dir)
+            #print(self._save_dir)
+            #print(self._log_dir)
         else:
             self._save_dir = save_dir / 'models' / exper_name / run_id
             self._log_dir = save_dir / 'log' / exper_name / run_id

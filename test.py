@@ -1,79 +1,144 @@
-import os.path
-import pickle
+import argparse
+import collections
+import torch
 import numpy as np
-import glob
-import csv
+import data_loader.data_loaders as module_data
+import model.loss as module_loss
+import model.metric as module_metric
+import model.model as module_arch
+from parse_config import ConfigParser
+from trainer import Trainer
+from utils import prepare_device, read_json
+import os
+import wandb
 from tqdm import tqdm
-from data_loader import BaseDatasetELEA, DataLoaderELEA
+import glob
 
 
+def average(arr):
+    # receives Nx5 and outputs 1x5
+    return np.average(arr, axis=0)
+
+def median(arr):
+    # receives Nx5 and outputs 1x5
+    return np.median(arr, axis=0)
+
+aggregate = {
+    "median": median,
+    "average": average,
+    }
+
+os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
+
+# fix random seeds for reproducibility
 SEED = 6
+torch.manual_seed(SEED)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
 np.random.seed(SEED)
 
-###################################################################333
-def main(data_path, speech_th, w_size, w_th, w_step, use_speech, normalize_x):
+def print_results(gt, pred):
+    mse = ((gt - pred)**2).mean(axis=0)
+    print(f"MSE for OCEAN: {mse}")
 
-    dataset_fname = 'speech_th_' + str(speech_th) + '_w_size_' + str(w_size) + '_w_th_' + str(w_th) + '_w_step_' + str(w_step)
+def test_single(config, leftout_idx, method):
+    if config.resume is None:
+        print("[ERROR] Please, specify the checkpoint to load by using the --resume/-r argument.")
+        return None, None
+
+    # load the data loader for this leftout_idx
+    config["data_loader"]["args"]["log"] = False
+    config["data_loader"]["args"]["drop_last"] = False
+    config["data_loader"]["args"]["leftout_idx"] = leftout_idx
+    #config["data_loader"]["args"]["batch_size"] = 16
+    data_loader = config.init_obj('data_loader', module_data)
+    valid_data_loader, test_data_loader = data_loader.split_validation_leaveoneout()
+
+    # build model architecture
+    config["arch"]["args"]["seq_length"] = config["data_loader"]["args"]["w_size"] # they are equal
+    model = config.init_obj('arch', module_arch)
+
+    #print('Loading checkpoint: {} ...'.format(config.resume)) 
+    checkpoint = torch.load(config.resume)
+    state_dict = checkpoint['state_dict']
+    if config['n_gpu'] > 1:
+        model = torch.nn.DataParallel(model)
+    model.load_state_dict(state_dict)
+
+    # prepare model for testing
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = model.to(device)
+    model.eval()
     
-    """
-    # saving on disk the preprocessed data
-    X_data = np.load(os.path.join(data_path,'preprocessed_data/',dataset_fname+'_X_data.npy'))
-    X_data_fname = np.load(os.path.join(data_path,'preprocessed_data/',dataset_fname+'_X_data_fname.npy'))
-    X_data_fname_unique = np.load(os.path.join(data_path,'preprocessed_data/',dataset_fname+'_X_data_fname_unique.npy'))
-    Y_data = np.load(os.path.join(data_path,'preprocessed_data/',dataset_fname+'_Y_data.npy'))
+    av_loss = 0
+    av_mets = {}
+    # we iterate through session and segment
+    all_results = []
+    with torch.no_grad():
+        # prepare batch data
+        for batch_idx, batch in enumerate(test_data_loader):
+                data, target = batch[0].to(device), batch[1].to(device)
 
-    print(X_data.shape)
-    #print(X_data[0][:5])
-    print(X_data_fname.shape)
-    #print(X_data_fname[:10])
-    print(X_data_fname_unique.shape)
-    #print(X_data_fname_unique[:10])
-    print(Y_data.shape)
-    #print(Y_data[:3])
-"""
+                output = model(data)
 
-    data_loader = DataLoaderELEA('./data/preprocessed_data', 32, shuffle=True, p_val=0.985, w_step=20)
-    data_loader_valid = data_loader.split_validation()
+                all_results.append(output.cpu().detach().numpy())
 
-    print("Training samples: " + str(len(data_loader) * 32))
-    print("Validation samples: " + str(len(data_loader_valid) * 32))
-    print("Total samples: " + str(len(data_loader.dataset)))
+    output = np.concatenate(all_results, axis=0)
 
-    """
-    dataset = data_loader.dataset
-    print(len(dataset))
-    for i in range(960, 970):#len(dataset)):
-        features, target = dataset[i]
-        print((features.shape, target))
-    """
-
-    for batch_idx, batch in enumerate(data_loader):
-        x, y = batch
-        print(x.shape)
-        print(y)#[:5])
-        break
-
-    for batch_idx, batch in enumerate(data_loader_valid):
-        x, y = batch
-        print(x.shape)
-        print(y[:5])
-        break
-
-    print(f"Correctly loaded!")
-###################################################################
+    #print(f"Aggregating with method '{method}'.")
+    y_pred = aggregate[method](output)
+    
+    y_GT = data_loader.dataset.get_GT_personality(leftout_idx)
+    return y_GT, y_pred
 
 
+###################################################################333
+def test_leave_one_out(config_path, checkpoints_path, method):
+    config = ConfigParser(read_json(config_path))
+
+    config.config["seed"] = SEED
+    config["data_loader"]["args"]["log"] = False
+    logger = config.get_logger('train', config['trainer']['verbosity'])
+
+    for i in range(torch.cuda.device_count()):
+        logger.info(f"> GPU {i} ready: {torch.cuda.get_device_name(i)}")
+
+    # setup data_loader instances
+    data_loader = config.init_obj('data_loader', module_data)
+
+    participants_ids = data_loader.dataset.participants_ids
+    num_participants = len(participants_ids)
+    check_models(checkpoints_path, participants_ids)
+
+    all_preds, all_gts = [], []
+    for p_id in tqdm(participants_ids):
+        config = ConfigParser(read_json(config_path), resume=os.path.join(checkpoints_path, f"lo{p_id}_model_best.pth"))
+        y_gt, y_pred = test_single(config, p_id, method=method)
+        all_preds.append(y_pred)
+        all_gts.append(y_gt)
+        
+    all_preds = np.stack(all_preds, axis=0)
+    all_gts = np.stack(all_gts, axis=0)
+
+    print_results(all_gts, all_preds)
+    
+    
+def check_models(checkpoints_path, participants_ids):
+    pth_paths = glob.glob(os.path.join(checkpoints_path, f"*model_best*.pth"))
+    for p_id in participants_ids:
+        assert os.path.join(checkpoints_path, f"lo{p_id}_model_best.pth") in pth_paths, f"Checkpoint for participant {p_id} not found!"
+    return True
 
 
-#----------------------------------------------------
-if __name__== "__main__":
-
-    speech_th = 0.01    # speech activity
-    w_size = 15         # window size
-    w_th = 0.75         # percentage of "window size" with speech activity higher than 'speech_th'
-    w_step = 1          # step used to shift the window when acquiring a new sample from the same trajectory
-
-    use_speech = False  # to include or not the speech activity fecture as part of the input feature fector
-    normalize_x = False # normalize X data by (X-mean)/std
-
-    main('./data', speech_th, w_size, w_th, w_step, use_speech, normalize_x)
+if __name__ == '__main__':
+    args = argparse.ArgumentParser(description='PyTorch Template')
+    args.add_argument('-c', '--config', default=None, type=str,
+                      help='config file in the checkpoints folder to be evaluated')
+    args.add_argument('-m', '--method', default=list(aggregate.keys())[0], type=str,
+                      help=f'options={tuple(aggregate.keys())}')
+    args = args.parse_args()
+    
+    assert args.method in tuple(aggregate.keys()), f"Method '{args.method}' is not implemented."
+    
+    checkpoints_path = os.path.dirname(args.config)
+    test_leave_one_out(args.config, checkpoints_path, args.method)

@@ -23,6 +23,7 @@ class BaseTrainer:
         self.save_period = cfg_trainer['save_period']
         self.monitor = cfg_trainer.get('monitor', 'off')
         self.wandb = "wandb" in config.config and config.config["wandb"]["store"]
+        self.leftout_idx = -1 if "leftout_idx" not in config.config["data_loader"]["args"] else config.config["data_loader"]["args"]["leftout_idx"]
         # config for recurrent training (custom training mode)
 
         # configuration to monitor model performance and save best
@@ -132,13 +133,16 @@ class BaseTrainer:
             'monitor_best': self.mnt_best,
             'config': self.config
         }
-        filename = str(self.checkpoint_dir / 'checkpoint-epoch{}.pth'.format(epoch))
+        prefix = ""
+        if self.leftout_idx != -1:
+            prefix = f"lo{self.leftout_idx}_"
+        filename = str(self.checkpoint_dir / f'{prefix}checkpoint-epoch{epoch}.pth')
         torch.save(state, filename)
         self.logger.info("Saving checkpoint: {} ...".format(filename))
         if save_best:
-            best_path = str(self.checkpoint_dir / 'model_best.pth')
+            best_path = str(self.checkpoint_dir / f'{prefix}model_best.pth')
             torch.save(state, best_path)
-            self.logger.info("Saving current best: model_best.pth ...")
+            self.logger.info(f"Saving current best: {prefix}model_best.pth ...")
 
     def _resume_checkpoint(self, resume_path):
         """

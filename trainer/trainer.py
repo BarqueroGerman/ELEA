@@ -83,7 +83,7 @@ class Trainer(BaseTrainer):
 
             # we run validation every X epochs (where X can be decimal)
             if self.do_validation and batch_idx + 1 in validation_steps:
-                print(f"Running validation at {batch_idx}...")
+                self.logger.info(f"Running validation at {batch_idx}...")
                 log = {}
                 log.update(**{'val_'+k : v for k, v in list(self._valid_epoch(epoch, batch_idx).items())})
                 times_validated += 1
@@ -156,3 +156,4 @@ class Trainer(BaseTrainer):
             current = batch_idx
             total = self.len_epoch
         return base.format(current, total, 100.0 * current / total)
+

@@ -48,15 +48,15 @@ def main(config, resume, wandb_id=None):
     logger = config.get_logger('train')
 
     # setup data_loader instances
-    data_loader = config.init_obj('data_loader_training', module_data)
+    data_loader = config.init_obj('data_loader', module_data)
     valid_data_loader = data_loader.split_validation()
 
-    batch_size = config["data_loader_training"]["args"]["batch_size"]
+    batch_size = config["data_loader"]["args"]["batch_size"]
     logger.info(f"Number of training samples: {len(data_loader) * batch_size}")
     logger.info(f"Number of validation samples: {len(valid_data_loader) * batch_size}")
 
     # build model architecture, then print to console
-    config["arch"]["args"]["seq_length"] = config["data_loader_training"]["args"]["w_size"] # totally related
+    config["arch"]["args"]["seq_length"] = config["data_loader"]["args"]["w_size"] # totally related
     model = config.init_obj('arch', module_arch)
     logger.info(model)
 
@@ -89,6 +89,7 @@ def main(config, resume, wandb_id=None):
 
     logger.info("Starting training...")
     trainer.train()
+    logger.info("Training finished!")
 
 
 if __name__ == '__main__':

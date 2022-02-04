@@ -9,14 +9,19 @@ class BaseDataLoader(DataLoader):
     """
     Base class for all data loaders
     """
-    def __init__(self, dataset, batch_size, shuffle, validation_split, num_workers, collate_fn=default_collate, drop_last=False):
+    def __init__(self, dataset, batch_size, shuffle, validation_split, num_workers, 
+                    collate_fn=default_collate,    
+                    drop_last=False, 
+                    leftout_idx=-1):
         self.validation_split = validation_split
+        self.leftout_idx = leftout_idx
         self.shuffle = shuffle
+        self.drop_last = drop_last
 
         self.batch_idx = 0
         self.n_samples = len(dataset)
 
-        self.sampler, self.valid_sampler = self._split_sampler(self.validation_split)
+        self.sampler, self.valid_sampler, self.test_sampler = self._split_sampler_leaveoneout(self.validation_split, leftout_idx)
 
         self.init_kwargs = {
             'dataset': dataset,
@@ -24,7 +29,7 @@ class BaseDataLoader(DataLoader):
             'shuffle': self.shuffle,
             'collate_fn': collate_fn,
             'num_workers': num_workers,
-            'drop_last': drop_last
+            'drop_last': self.drop_last
         }
         super().__init__(sampler=self.sampler, **self.init_kwargs)
 
@@ -56,11 +61,29 @@ class BaseDataLoader(DataLoader):
 
         return train_sampler, valid_sampler
 
+        # we do it here because we want to split by participant and not simply idces.
+    def _split_sampler_leaveoneout(self, valid_split, leftout_idx):
+        raise NotImplementedError
+
     def split_validation(self):
         if self.valid_sampler is None:
             return None
         else:
             return DataLoader(sampler=self.valid_sampler, **self.init_kwargs)
+
+    def split_validation_leaveoneout(self):
+        if self.valid_sampler is None and self.test_sampler is None:
+            # valid and test sets disabled
+            return None, None
+        elif self.valid_sampler is None:
+            # only test set enabled
+            return None, DataLoader(sampler=self.test_sampler, **self.init_kwargs)
+        elif self.test_sampler is None:
+            # only valid set enabled
+            return DataLoader(sampler=self.valid_sampler, **self.init_kwargs), None
+        else:
+            # both valid and test sets enabled
+            return DataLoader(sampler=self.valid_sampler, **self.init_kwargs), DataLoader(sampler=self.test_sampler, **self.init_kwargs)
 
 
     def unnormalize(self, x):

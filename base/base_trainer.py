@@ -79,25 +79,26 @@ class BaseTrainer:
                 self.logger.info('    {:15s}: {}'.format(str(key), value))
 
             # evaluate model performance according to configured metric, save best checkpoint as model_best
-            if epoch % self.save_period == 0:
-                best = False
-                if self.mnt_mode != 'off':
-                    try:
-                        # check whether model performance improved or not, according to specified metric(mnt_metric)
-                        improved = (self.mnt_mode == 'min' and log[self.mnt_metric] <= self.mnt_best) or \
-                                (self.mnt_mode == 'max' and log[self.mnt_metric] >= self.mnt_best)
-                    except KeyError:
-                        self.logger.warning("Warning: Metric '{}' is not found. "
-                                            "Model performance monitoring is disabled.".format(self.mnt_metric))
-                        self.mnt_mode = 'off'
-                        improved = False
+            best = False
+            if self.mnt_mode != 'off':
+                try:
+                    # check whether model performance improved or not, according to specified metric(mnt_metric)
+                    improved = (self.mnt_mode == 'min' and log[self.mnt_metric] <= self.mnt_best) or \
+                            (self.mnt_mode == 'max' and log[self.mnt_metric] >= self.mnt_best)
+                except KeyError:
+                    self.logger.warning("Warning: Metric '{}' is not found. "
+                                        "Model performance monitoring is disabled.".format(self.mnt_metric))
+                    self.mnt_mode = 'off'
+                    improved = False
 
-                    if improved:
-                        self.mnt_best = log[self.mnt_metric]
-                        not_improved_count = 0
-                        best = True
-                    else:
-                        not_improved_count += 1
+                if improved:
+                    self.mnt_best = log[self.mnt_metric]
+                    not_improved_count = 0
+                    best = True
+                else:
+                    not_improved_count += 1
+                    
+            if epoch % self.save_period == 0:
 
                 self._save_checkpoint(epoch, save_best=best)
                 if epoch // self.save_period > 1:
